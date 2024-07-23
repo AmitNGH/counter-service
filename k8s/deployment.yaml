@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: amit-counter-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: amit-counter
+  template:
+    metadata:
+      labels:
+        app: amit-counter
+    spec:
+      containers:
+      - name: amit-counter
+        image: ${DOCKER_USERNAME}/${IMAGE_NAME_AND_TAG}
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+        env:
+        - name: DB_HOST
+          value: "${DATABASE_ENDPOINT}"
+        - name: DB_USER
+          value: "${DATABASE_USER}"
+        - name: DB_PASSWORD
+          value: "${DATABASE_PASSWORD}"
+        - name: DB_NAME
+          value: "${DATABASE_SCHEMA}"

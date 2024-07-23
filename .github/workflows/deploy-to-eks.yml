@@ -6,9 +6,81 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build-and-deploy:
+  build-image-and-push:
+    name: Build Docker image and push
     runs-on: ubuntu-latest
+
+    env:
+      DOCKER_USERNAME: ${{ vars.DOCKER_USERNAME }}
 
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ env.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build Docker image
+      run: |
+        docker build -t ${{ env.DOCKER_USERNAME }}/counter-service:latest .
+        
+    - name: Tag Docker image
+      run: |
+        IMAGE_DATE=$(date +%Y-%m-%d-%H-%M-%S)
+        echo ${IMAGE_DATE}
+        docker image tag ${{ env.DOCKER_USERNAME }}/counter-service:latest ${{ env.DOCKER_USERNAME }}/counter-service:${IMAGE_DATE}
+
+    - name: Push Docker image
+      run: |
+        docker image push --all-tags ${{ env.DOCKER_USERNAME }}/counter-service
+
+  deploy-k8s-to-eks:
+    name: Deploy kubernetes to EKS
+    needs: build-image-and-push
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{vars.AWS_REGION}}
+      EKS_CLUSTER_NAME: ${{vars.EKS_CLUSTER_NAME}}
+      DOCKER_USERNAME: ${{ vars.DOCKER_USERNAME }}
+      IMAGE_NAME_AND_TAG: ${{ vars.IMAGE_NAME_AND_TAG }}
+      NAMESPACE: ${{ vars.K8S_NAMESPACE }}
+      DATABASE_ENDPOINT: ${{vars.DATABASE_ENDPOINT}}
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
+
+    - name: Create namespace
+      run: |
+        kubectl apply -f k8s/namespace.yaml
+
+    - name: Deploy application and service
+      run: |
+        sed -e "s/\${DOCKER_USERNAME}/${{ env.DOCKER_USERNAME }}/g" \
+            -e "s/\${IMAGE_NAME_AND_TAG}/${{ env.IMAGE_NAME_AND_TAG }}/g" \
+            -e "s/\${DATABASE_ENDPOINT}/${{ env.DATABASE_ENDPOINT }}/g" \
+            -e "s/\${DATABASE_USER}/${{ secrets.DATABASE_USER }}/g" \
+            -e "s/\${DATABASE_PASSWORD}/${{ secrets.DATABASE_PASSWORD }}/g" \
+            -e "s/\${DATABASE_SCHEMA}/${{ secrets.DATABASE_SCHEMA }}/g" \
+            k8s/deployment.yaml > deployment.yaml
+
+        kubectl -n ${{ env.NAMESPACE }} apply -f deployment.yaml
+        kubectl -n ${{ env.NAMESPACE }} rollout restart deployment/amit-counter-deployment
+        
+        kubectl -n ${{ env.NAMESPACE }} apply -f k8s/service.yaml
+        
